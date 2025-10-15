@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HOF Tracker - Interactive Stats Comparison</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(to bottom right, #f8fafc, #dbeafe);
+            min-height: 100vh;
+            padding: 1rem;
+        }
+        #root { max-width: 1400px; margin: 0 auto; }
+        .chart-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 1.5rem;
+        }
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        .filters-container {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+        .filter-row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            width: 100%;
+        }
+        h1 {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #1f2937;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #4b5563;
+        }
+        .filter-box {
+            display: flex;
+            flex-direction: column;
+        }
+        .filter-box label {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 0.5rem;
+        }
+        .filter-box select, .filter-box input {
+            padding: 0.5rem 1rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            min-width: 140px;
+        }
+        .filter-box select {
+            cursor: pointer;
+        }
+        .filter-box select:focus, .filter-box input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        .year-filter {
+            display: flex;
+            gap: 0.5rem;
+            align-items: flex-end;
+        }
+        .year-filter select {
+            min-width: 60px;
+        }
+        .year-filter input {
+            width: 100px;
+        }
+        .player-count {
+            font-size: 0.875rem;
+            color: #6b7280;
+            margin-bottom: 1rem;
+        }
+        .chart-wrapper { 
+            position: relative; 
+            overflow-x: auto;
+            overflow-y: visible;
+        }
+        .chart-scroll {
+            min-width: 900px;
+        }
+        svg { display: block; margin: 0 auto; }
+        .tooltip {
+            position: absolute;
+            background: #1f2937;
+            color: white;
+            padding: 0.75rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            font-size: 0.875rem;
+            pointer-events: none;
+            z-index: 10;
+            max-width: 250px;
+        }
+        .tooltip-name { font-weight: bold; margin-bottom: 0.25rem; }
+        .source {
+            position: absolute;
+            font-size: 11px;
+            color: #6b7280;
+            bottom: 10px;
+            left: 60px;
+        }
+        .cursor-pointer { cursor: pointer; }
+        .loading { text-align: center; padding: 2rem; color: #6b7280; }
+        .error { text-align: center; padding: 2rem; color: #dc2626; }
+        @media (max-width: 1024px) {
+            body { padding: 0.5rem; }
+            .chart-container { padding: 1rem; }
+            h1 { font-size: 1.25rem; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function WARChart() {
+            const [allHitters, setAllHitters] = useState([]);
+            const [allPitchers, setAllPitchers] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [hoveredPlayer, setHoveredPlayer] = useState(null);
+            const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+            const [playerType, setPlayerType] = useState('Hitters');
+            const [selectedTeam, setSelectedTeam] = useState('All Teams');
+            const [selectedPosition, setSelectedPosition] = useState('All Positions');
+            const [xStat, setXStat] = useState('oWAR');
+            const [yStat, setYStat] = useState('dWAR');
+            const [debutOperator, setDebutOperator] = useState('>');
+            const [debutYear, setDebutYear] = useState('');
+
+            const handlePlayerTypeChange = (newType) => {
+                setPlayerType(newType);
+                if (newType === 'Pitchers') {
+                    setXStat('ERA');
+                    setYStat('SO');
+                } else {
+                    setXStat('oWAR');
+                    setYStat('dWAR');
+                }
+            };
+
+            useEffect(() => {
+                const loadData = async () => {
+                    try {
+                        const sheetId = '15kTGoq3cSPRxmqVA3uGDZhM0VCmTt79p2V1p3LiVZUY';
+                        
+                        // Load Hitters
+                        const hittersUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=0`;
+                        const hittersResponse = await fetch(hittersUrl);
+                        const hittersCsv = await hittersResponse.text();
+                        const hittersData = parseCSV(hittersCsv, 'hitter');
+                        
+                        // Load Pitchers
+                        const pitchersUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=1089878583`;
+                        const pitchersResponse = await fetch(pitchersUrl);
+                        const pitchersCsv = await pitchersResponse.text();
+                        const pitchersData = parseCSV(pitchersCsv, 'pitcher');
+                        
+                        setAllHitters(hittersData);
+                        setAllPitchers(pitchersData);
+                        console.log('Loaded', hittersData.length, 'hitters and', pitchersData.length, 'pitchers');
+                        setLoading(false);
+                    } catch (err) {
+                        console.error('Error loading data:', err);
+                        setError(err.message);
+                        setLoading(false);
+                    }
+                };
+                loadData();
+            }, []);
+
+            const parseCSV = (csvText, type) => {
+                const lines = csvText.split('\n').filter(line => line.trim());
+                const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
+                
+                const jsonData = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const line = lines[i];
+                    const values = [];
+                    let current = '';
+                    let inQuotes = false;
+                    
+                    for (let char of line) {
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === ',' && !inQuotes) {
+                            values.push(current.trim().replace(/^"|"$/g, ''));
+                            current = '';
+                        } else {
+                            current += char;
+                        }
+                    }
+                    values.push(current.trim().replace(/^"|"$/g, ''));
+                    
+                    if (type === 'hitter' && values.length >= 36 && values[1]) {
+                        // Columns: B=Player, C=WAR, D=DebutYear, ... AH=PrimaryPosition, AI=Team, AJ=Type
+                        // Check Type column (AJ = index 35) to filter
+                        const playerTypeCol = values[35] || '';
+                        if (playerTypeCol.toLowerCase() !== 'hitter') {
+                            continue;
+                        }
+                        
+                        // Check Exclude column (AG = index 32)
+                        const exclude = values[32] || '';
+                        if (exclude.toLowerCase() === 'x' || exclude.toLowerCase() === 'exclude') {
+                            continue;
+                        }
+                        
+                        const row = {
+                            Type: 'Hitter',
+                            Player: values[1],      // Column B
+                            WAR: parseFloat(values[2]) || 0,  // Column C
+                            DebutYear: parseInt(values[3]) || 0,  // Column D
+                            G: parseInt(values[5]) || 0,    // Column F
+                            PA: parseInt(values[6]) || 0,   // Column G
+                            AB: parseInt(values[7]) || 0,   // Column H
+                            R: parseInt(values[8]) || 0,    // Column I
+                            H: parseInt(values[9]) || 0,    // Column J
+                            '1B': parseInt(values[10]) || 0, // Column K
+                            '2B': parseInt(values[11]) || 0, // Column L
+                            '3B': parseInt(values[12]) || 0, // Column M
+                            HR: parseInt(values[13]) || 0,   // Column N
+                            'HR%': parseFloat(values[14]) || 0, // Column O
+                            RBI: parseInt(values[15]) || 0,  // Column P
+                            SB: parseInt(values[16]) || 0,   // Column Q
+                            CS: parseInt(values[17]) || 0,   // Column R
+                            'SB%': parseFloat(values[18]) || 0, // Column S
+                            BB: parseInt(values[19]) || 0,   // Column T
+                            'BB%': parseFloat(values[20]) || 0, // Column U
+                            SO: parseInt(values[21]) || 0,   // Column V
+                            'SO%': parseFloat(values[22]) || 0, // Column W
+                            BA: parseFloat(values[23]) || 0, // Column X
+                            OBP: parseFloat(values[24]) || 0, // Column Y
+                            SLG: parseFloat(values[25]) || 0, // Column Z
+                            OPS: parseFloat(values[26]) || 0, // Column AA
+                            'OPS+': parseInt(values[27]) || 0, // Column AB
+                            TB: parseInt(values[28]) || 0,   // Column AC
+                            WAA: parseFloat(values[29]) || 0, // Column AD
+                            oWAR: parseFloat(values[30]) || 0, // Column AE
+                            dWAR: parseFloat(values[31]) || 0, // Column AF
+                            PrimaryPosition: values[33] || '', // Column AH
+                            Team: values[34] || ''   // Column AI
+                        };
+                        
+                        jsonData.push(row);
+                    } else if (type === 'pitcher' && values.length >= 35 && values[1]) {
+                        // Columns: B=Player, C=WAR, D=DebutYear, ... AH=Team, AI=Type
+                        // Check Type column (AI = index 34) to filter
+                        const playerTypeCol = values[34] || '';
+                        if (playerTypeCol.toLowerCase() !== 'pitcher') {
+                            continue;
+                        }
+                        
+                        // Check Exclude column (AG = index 32)
+                        const exclude = values[32] || '';
+                        if (exclude.toLowerCase() === 'x' || exclude.toLowerCase() === 'exclude') {
+                            continue;
+                        }
+                        
+                        const row = {
+                            Type: 'Pitcher',
+                            Player: values[1],      // Column B
+                            WAR: parseFloat(values[2]) || 0,  // Column C
+                            DebutYear: parseInt(values[3]) || 0,  // Column D
+                            W: parseInt(values[6]) || 0,     // Column G
+                            L: parseInt(values[7]) || 0,     // Column H
+                            'W-L%': parseFloat(values[8]) || 0, // Column I
+                            ERA: parseFloat(values[9]) || 0,  // Column J
+                            G: parseInt(values[10]) || 0,    // Column K
+                            GS: parseInt(values[11]) || 0,   // Column L
+                            CG: parseInt(values[12]) || 0,   // Column M
+                            SHO: parseInt(values[13]) || 0,  // Column N
+                            SV: parseInt(values[14]) || 0,   // Column O
+                            IP: parseFloat(values[15]) || 0, // Column P
+                            H: parseInt(values[16]) || 0,    // Column Q
+                            R: parseInt(values[17]) || 0,    // Column R
+                            ER: parseInt(values[18]) || 0,   // Column S
+                            HR: parseInt(values[19]) || 0,   // Column T
+                            BB: parseInt(values[20]) || 0,   // Column U
+                            SO: parseInt(values[21]) || 0,   // Column V
+                            BF: parseInt(values[22]) || 0,   // Column W
+                            'ERA+': parseInt(values[23]) || 0, // Column X
+                            FIP: parseFloat(values[24]) || 0,  // Column Y
+                            WHIP: parseFloat(values[25]) || 0, // Column Z
+                            H9: parseFloat(values[26]) || 0,   // Column AA
+                            HR9: parseFloat(values[27]) || 0,  // Column AB
+                            BB9: parseFloat(values[28]) || 0,  // Column AC
+                            SO9: parseFloat(values[29]) || 0,  // Column AD
+                            'SO/W': parseFloat(values[30]) || 0, // Column AE
+                            WAA: parseFloat(values[31]) || 0,  // Column AF
+                            Team: values[33] || ''   // Column AH
+                        };
+                        
+                        jsonData.push(row);
+                    }
+                }
+                
+                return jsonData;
+            };
+
+            if (loading) return <div className="loading">Loading data...</div>;
+            if (error) return <div className="error">Error: {error}</div>;
+            if (allHitters.length === 0 && allPitchers.length === 0) return <div className="loading">No data available</div>;
+
+            const hitterStats = [
+                { value: 'WAR', label: 'WAR' },
+                { value: 'oWAR', label: 'oWAR' },
+                { value: 'dWAR', label: 'dWAR' },
+                { value: 'WAA', label: 'WAA' },
+                { value: 'BA', label: 'BA' },
+                { value: 'OBP', label: 'OBP' },
+                { value: 'SLG', label: 'SLG' },
+                { value: 'OPS', label: 'OPS' },
+                { value: 'OPS+', label: 'OPS+' },
+                { value: 'HR', label: 'HR' },
+                { value: 'RBI', label: 'RBI' },
+                { value: 'H', label: 'H' },
+                { value: 'R', label: 'R' },
+                { value: 'SB', label: 'SB' },
+                { value: 'BB', label: 'BB' },
+                { value: 'SO', label: 'SO' },
+                { value: 'G', label: 'G' },
+                { value: 'PA', label: 'PA' },
+                { value: 'AB', label: 'AB' },
+                { value: '2B', label: '2B' },
+                { value: '3B', label: '3B' },
+                { value: 'TB', label: 'TB' }
+            ];
+
+            const pitcherStats = [
+                { value: 'WAR', label: 'WAR' },
+                { value: 'WAA', label: 'WAA' },
+                { value: 'ERA', label: 'ERA' },
+                { value: 'ERA+', label: 'ERA+' },
+                { value: 'FIP', label: 'FIP' },
+                { value: 'WHIP', label: 'WHIP' },
+                { value: 'W', label: 'W' },
+                { value: 'L', label: 'L' },
+                { value: 'W-L%', label: 'W-L%' },
+                { value: 'G', label: 'G' },
+                { value: 'GS', label: 'GS' },
+                { value: 'CG', label: 'CG' },
+                { value: 'SHO', label: 'SHO' },
+                { value: 'SV', label: 'SV' },
+                { value: 'IP', label: 'IP' },
+                { value: 'SO', label: 'SO' },
+                { value: 'BB', label: 'BB' },
+                { value: 'SO/W', label: 'SO/W' },
+                { value: 'H9', label: 'H9' },
+                { value: 'HR9', label: 'HR9' },
+                { value: 'BB9', label: 'BB9' },
+                { value: 'SO9', label: 'SO9' }
+            ];
+
+            const currentStats = playerType === 'Hitters' ? hitterStats : pitcherStats;
+            const allData = playerType === 'Hitters' ? allHitters : allPitchers;
+
+            const teams = ['All Teams', ...new Set(allData.flatMap(p => 
+                p.Team ? p.Team.split(',').map(t => t.trim()) : []
+            ))].sort((a, b) => {
+                if (a === 'All Teams') return -1;
+                if (b === 'All Teams') return 1;
+                return a.localeCompare(b);
+            });
+
+            const positions = ['All Positions', 'P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH'];
+
+            let data = allData;
+            
+            if (selectedTeam !== 'All Teams') {
+                data = data.filter(p => p.Team && p.Team.split(',').map(t => t.trim()).includes(selectedTeam));
+            }
+            
+            if (playerType === 'Hitters' && selectedPosition !== 'All Positions') {
+                data = data.filter(p => p.PrimaryPosition === selectedPosition);
+            }
+
+            if (debutYear) {
+                const year = parseInt(debutYear);
+                if (!isNaN(year)) {
+                    data = data.filter(p => {
+                        if (debutOperator === '>') return p.DebutYear > year;
+                        if (debutOperator === '<') return p.DebutYear < year;
+                        return p.DebutYear === year;
+                    });
+                }
+            }
+
+            const width = 900;
+            const height = 600;
+            const margin = { top: 40, right: 40, bottom: 60, left: 60 };
+            const chartWidth = width - margin.left - margin.right;
+            const chartHeight = height - margin.top - margin.bottom;
+
+            const xValues = data.map(d => d[xStat]).filter(v => !isNaN(v) && v !== undefined);
+            const yValues = data.map(d => d[yStat]).filter(v => !isNaN(v) && v !== undefined);
+            
+            if (xValues.length === 0 || yValues.length === 0) {
+                return <div className="loading">No valid data for selected stats</div>;
+            }
+
+            const minX = Math.min(...xValues);
+            const maxX = Math.max(...xValues);
+            const minY = Math.min(...yValues);
+            const maxY = Math.max(...yValues);
+
+            const xRange = maxX - minX || 1;
+            const yRange = maxY - minY || 1;
+            const xMin = minX - xRange * 0.1;
+            const xMax = maxX + xRange * 0.1;
+            const yMin = minY - yRange * 0.1;
+            const yMax = maxY + yRange * 0.1;
+
+            const scaleX = (val) => ((val - xMin) / (xMax - xMin)) * chartWidth;
+            const scaleY = (val) => chartHeight - ((val - yMin) / (yMax - yMin)) * chartHeight;
+            
+            const warValues = data.map(d => d.WAR).filter(v => !isNaN(v));
+            const minWAR = Math.min(...warValues);
+            const maxWAR = Math.max(...warValues);
+            const scaleRadius = (war) => 5 + ((war - minWAR) / (maxWAR - minWAR || 1)) * 20;
+
+            const xTicks = [];
+            const yTicks = [];
+            for (let i = 0; i <= 10; i++) {
+                xTicks.push(xMin + (xMax - xMin) * (i / 10));
+                yTicks.push(yMin + (yMax - yMin) * (i / 10));
+            }
+
+            const handleMouseMove = (e, player) => {
+                const svg = e.currentTarget.closest('svg');
+                const rect = svg.getBoundingClientRect();
+                setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+                setHoveredPlayer(player);
+            };
+
+            const formatValue = (val, stat) => {
+                if (val === undefined || isNaN(val)) return 'N/A';
+                if (stat === 'BA' || stat === 'OBP' || stat === 'SLG' || stat === 'OPS' || stat === 'W-L%') {
+                    return val.toFixed(3);
+                }
+                if (stat === 'ERA' || stat === 'FIP' || stat === 'WHIP' || stat === 'H9' || stat === 'HR9' || stat === 'BB9' || stat === 'SO9' || stat === 'SO/W') {
+                    return val.toFixed(2);
+                }
+                return val.toFixed(1);
+            };
+
+            return (
+                <div className="chart-container">
+                    <div className="header-row">
+                        <div>
+                            <h1>HOF Tracker - Interactive Stats Comparison</h1>
+                            <p className="subtitle">Compare statistics for Hall of Fame hitters and pitchers</p>
+                        </div>
+                    </div>
+
+                    <div className="filters-container">
+                        <div className="filter-row">
+                            <div className="filter-box">
+                                <label>Player Type</label>
+                                <select value={playerType} onChange={(e) => handlePlayerTypeChange(e.target.value)}>
+                                    <option value="Hitters">Hitters</option>
+                                    <option value="Pitchers">Pitchers</option>
+                                </select>
+                            </div>
+                            <div className="filter-box">
+                                <label>X-Axis Stat</label>
+                                <select value={xStat} onChange={(e) => setXStat(e.target.value)}>
+                                    {currentStats.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="filter-box">
+                                <label>Y-Axis Stat</label>
+                                <select value={yStat} onChange={(e) => setYStat(e.target.value)}>
+                                    {currentStats.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="filter-box">
+                                <label>Filter by Team</label>
+                                <select value={selectedTeam} onChange={(e) => setSelectedTeam(e.target.value)}>
+                                    {teams.map(team => (
+                                        <option key={team} value={team}>{team}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            {playerType === 'Hitters' && (
+                                <div className="filter-box">
+                                    <label>Filter by Position</label>
+                                    <select value={selectedPosition} onChange={(e) => setSelectedPosition(e.target.value)}>
+                                        {positions.map(pos => (
+                                            <option key={pos} value={pos}>{pos}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                            <div className="filter-box">
+                                <label>Debut Year</label>
+                                <div className="year-filter">
+                                    <select value={debutOperator} onChange={(e) => setDebutOperator(e.target.value)}>
+                                        <option value=">">{'>'}</option>
+                                        <option value="<">{'<'}</option>
+                                        <option value="=">=</option>
+                                    </select>
+                                    <input 
+                                        type="number" 
+                                        placeholder="Year"
+                                        value={debutYear}
+                                        onChange={(e) => setDebutYear(e.target.value)}
+                                        min="1800"
+                                        max="2025"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p className="player-count">
+                        {data.length} {playerType.toLowerCase()} shown
+                    </p>
+                    
+                    <div className="chart-wrapper">
+                        <div className="chart-scroll">
+                            <svg width={width} height={height}>
+                                <g transform={`translate(${margin.left},${margin.top})`}>
+                                    {xTicks.map((tick, i) => (
+                                        <line key={`x-grid-${i}`} x1={scaleX(tick)} y1={0} x2={scaleX(tick)} y2={chartHeight} stroke="#e5e7eb" strokeWidth="1" />
+                                    ))}
+                                    {yTicks.map((tick, i) => (
+                                        <line key={`y-grid-${i}`} x1={0} y1={scaleY(tick)} x2={chartWidth} y2={scaleY(tick)} stroke="#e5e7eb" strokeWidth="1" />
+                                    ))}
+
+                                    <line x1={0} y1={chartHeight} x2={chartWidth} y2={chartHeight} stroke="#374151" strokeWidth="2" />
+                                    {xTicks.filter((_, i) => i % 2 === 0).map((tick, i) => (
+                                        <g key={`x-tick-${i}`}>
+                                            <line x1={scaleX(tick)} y1={chartHeight} x2={scaleX(tick)} y2={chartHeight + 6} stroke="#374151" strokeWidth="2" />
+                                            <text x={scaleX(tick)} y={chartHeight + 20} textAnchor="middle" style={{fontSize: '12px', fill: '#4b5563'}}>
+                                                {formatValue(tick, xStat)}
+                                            </text>
+                                        </g>
+                                    ))}
+                                    <text x={chartWidth / 2} y={chartHeight + 45} textAnchor="middle" style={{fontSize: '14px', fontWeight: '600', fill: '#1f2937'}}>
+                                        {currentStats.find(s => s.value === xStat)?.label || xStat}
+                                    </text>
+
+                                    <line x1={0} y1={0} x2={0} y2={chartHeight} stroke="#374151" strokeWidth="2" />
+                                    {yTicks.filter((_, i) => i % 2 === 0).map((tick, i) => (
+                                        <g key={`y-tick-${i}`}>
+                                            <line x1={0} y1={scaleY(tick)} x2={-6} y2={scaleY(tick)} stroke="#374151" strokeWidth="2" />
+                                            <text x={-10} y={scaleY(tick)} textAnchor="end" dominantBaseline="middle" style={{fontSize: '12px', fill: '#4b5563'}}>
+                                                {formatValue(tick, yStat)}
+                                            </text>
+                                        </g>
+                                    ))}
+                                    <text x={-35} y={chartHeight / 2} textAnchor="middle" transform={`rotate(-90, -35, ${chartHeight / 2})`} style={{fontSize: '14px', fontWeight: '600', fill: '#1f2937'}}>
+                                        {currentStats.find(s => s.value === yStat)?.label || yStat}
+                                    </text>
+
+                                    {data.map((player, i) => {
+                                        const xVal = player[xStat];
+                                        const yVal = player[yStat];
+                                        
+                                        if (xVal === undefined || yVal === undefined || isNaN(xVal) || isNaN(yVal)) {
+                                            return null;
+                                        }
+                                        
+                                        const x = scaleX(xVal);
+                                        const y = scaleY(yVal);
+                                        const r = scaleRadius(player.WAR);
+                                        const isHovered = hoveredPlayer?.Player === player.Player;
+
+                                        return (
+                                            <circle
+                                                key={i}
+                                                cx={x} cy={y} r={r}
+                                                fill={isHovered ? "#2563eb" : "#3b82f6"}
+                                                fillOpacity={isHovered ? 0.9 : 0.6}
+                                                stroke={isHovered ? "#1e40af" : "#2563eb"}
+                                                strokeWidth={isHovered ? 2 : 1}
+                                                className="cursor-pointer"
+                                                onMouseMove={(e) => handleMouseMove(e, player)}
+                                                onMouseLeave={() => setHoveredPlayer(null)}
+                                            />
+                                        );
+                                    })}
+                                </g>
+                            </svg>
+
+                            {hoveredPlayer && (
+                                <div className="tooltip" style={{ left: mousePos.x + 15, top: mousePos.y - 10 }}>
+                                    <div className="tooltip-name">{hoveredPlayer.Player}</div>
+                                    <div>Type: {hoveredPlayer.Type}</div>
+                                    <div>Team: {hoveredPlayer.Team}</div>
+                                    {hoveredPlayer.Type === 'Hitter' && hoveredPlayer.PrimaryPosition && (
+                                        <div>Position: {hoveredPlayer.PrimaryPosition}</div>
+                                    )}
+                                    <div>Debut: {hoveredPlayer.DebutYear}</div>
+                                    <div>Total WAR: {hoveredPlayer.WAR.toFixed(1)}</div>
+                                    <div>{xStat}: {formatValue(hoveredPlayer[xStat], xStat)}</div>
+                                    <div>{yStat}: {formatValue(hoveredPlayer[yStat], yStat)}</div>
+                                </div>
+                            )}
+                            
+                            <div className="source">
+                                Source: Baseball Reference
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<WARChart />, document.getElementById('root'));
+    </script>
+</body>
+</html>
